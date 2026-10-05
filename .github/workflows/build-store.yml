@@ -5,6 +5,10 @@ on:
     branches: [ "arena/01a109fb-tjaraty-app" ]
   workflow_dispatch:
 
+permissions:
+  contents: read
+  issues: write
+
 jobs:
   build-store:
     runs-on: ubuntu-latest
@@ -40,7 +44,7 @@ jobs:
       - name: Sync Capacitor
         run: |
           npx cap sync android
-          ls -lh android/app/src/main/assets/public | head -n 20
+          ls -lh android/app/src/main/assets/public | head -n 30
 
       - name: Create local.properties
         run: |
@@ -82,18 +86,6 @@ jobs:
             -PMYAPP_RELEASE_KEY_PASSWORD=tjaraty123 \
             --stacktrace 2>&1 | tee /tmp/gradle-apk.log; test ${PIPESTATUS[0]} -eq 0
 
-      - name: Show log tail on failure
-        if: failure()
-        run: |
-          echo "===== AAB LOG TAIL ====="
-          tail -n 200 /tmp/gradle-aab.log || true
-          echo "===== APK LOG TAIL ====="
-          tail -n 200 /tmp/gradle-apk.log || true
-          gh gist create /tmp/gradle-aab.log --public -d "gradle aab log ${{ github.run_id }}" || true
-          gh gist create /tmp/gradle-apk.log --public -d "gradle apk log ${{ github.run_id }}" || true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
       - name: List outputs
         if: success()
         run: |
@@ -121,6 +113,23 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: tjaraty-keystore
-          path: |
-            android/app/tjaraty-release.keystore
+          path: android/app/tjaraty-release.keystore
           retention-days: 90
+
+      - name: Report failure to issue
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let log = '';
+            try { log = fs.readFileSync('/tmp/gradle-aab.log', 'utf8'); } catch(e) { try { log = fs.readFileSync('/tmp/gradle-apk.log','utf8'); } catch(e2){ log = 'no log: '+e.message; } }
+            const tail = log.slice(-8000);
+            const title = `Gradle Store Failure - Run ${context.runId}`;
+            const body = `**Build failed for commit ${context.sha}**\n\n\`\`\`\n${tail}\n\`\`\`\n\n[View run](https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`;
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: title,
+              body: body
+            });
