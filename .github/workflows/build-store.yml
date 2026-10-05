@@ -1,0 +1,151 @@
+name: Build Store - تِجارتي (AAB + APK)
+
+on:
+  push:
+    branches: [ "arena/01a109fb-tjaraty-app" ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  build-store:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Setup Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Setup Android SDK
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --list_installed 2>&1 | head -n 30 || true
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
+          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0" "platforms;android-34" "build-tools;34.0.0" || true
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build web (static export)
+        run: npm run build
+
+      - name: Sync Capacitor
+        run: |
+          npx cap sync android
+          ls -lh android/app/src/main/assets/public | head -n 20
+
+      - name: Create local.properties
+        run: |
+          echo "sdk.dir=$ANDROID_HOME" > android/local.properties
+          cat android/local.properties
+
+      - name: Generate Release Keystore (if not exists)
+        run: |
+          if [ ! -f android/app/tjaraty-release.keystore ]; then
+            keytool -genkey -v \
+              -keystore android/app/tjaraty-release.keystore \
+              -alias tjaraty \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass tjaraty123 -keypass tjaraty123 \
+              -dname "CN=Abdullah Al-Humairi, OU=Tjaraty, O=Tjaraty App, L=Aden, S=Aden, C=YE"
+            echo "✓ Keystore generated"
+          else
+            echo "✓ Keystore already exists"
+          fi
+          ls -lh android/app/*.keystore || true
+
+      - name: Build Release AAB (for Play Store)
+        working-directory: android
+        run: |
+          ./gradlew bundleRelease \
+            -PMYAPP_RELEASE_STORE_FILE=tjaraty-release.keystore \
+            -PMYAPP_RELEASE_STORE_PASSWORD=tjaraty123 \
+            -PMYAPP_RELEASE_KEY_ALIAS=tjaraty \
+            -PMYAPP_RELEASE_KEY_PASSWORD=tjaraty123 \
+            --stacktrace 2>&1 | tee /tmp/gradle-aab.log; test ${PIPESTATUS[0]} -eq 0
+
+      - name: Build Release APK (signed)
+        working-directory: android
+        run: |
+          ./gradlew assembleRelease \
+            -PMYAPP_RELEASE_STORE_FILE=tjaraty-release.keystore \
+            -PMYAPP_RELEASE_STORE_PASSWORD=tjaraty123 \
+            -PMYAPP_RELEASE_KEY_ALIAS=tjaraty \
+            -PMYAPP_RELEASE_KEY_PASSWORD=tjaraty123 \
+            --stacktrace 2>&1 | tee /tmp/gradle-apk.log; test ${PIPESTATUS[0]} -eq 0
+
+      - name: List outputs
+        if: success()
+        run: |
+          ls -lh android/app/build/outputs/bundle/release/ || true
+          ls -lh android/app/build/outputs/apk/release/ || true
+
+      - name: Upload AAB (Play Store)
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tjaraty-store-aab
+          path: android/app/build/outputs/bundle/release/app-release.aab
+          retention-days: 30
+
+      - name: Upload Signed APK (Store)
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tjaraty-store-apk
+          path: android/app/build/outputs/apk/release/app-release.apk
+          retention-days: 30
+
+      - name: Upload Keystore (KEEP SAFE!)
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tjaraty-keystore
+          path: android/app/tjaraty-release.keystore
+          retention-days: 90
+
+      - name: Commit Store files to repo (direct download)
+        if: success()
+        run: |
+          cp android/app/build/outputs/bundle/release/app-release.aab ./tjaraty-release.aab || true
+          cp android/app/build/outputs/apk/release/app-release.apk ./tjaraty-release.apk || true
+          cp android/app/tjaraty-release.keystore ./tjaraty-release.keystore || true
+          ls -lh ./tjaraty-release.* 2>&1 | head -n 20
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add tjaraty-release.aab tjaraty-release.apk tjaraty-release.keystore || true
+          git commit -m "chore: add store AAB/APK + keystore [skip ci]" || echo "no changes"
+          git push origin HEAD:arena/01a109fb-tjaraty-app || echo "push failed"
+
+      - name: Report failure to issue
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let log = '';
+            try { log = fs.readFileSync('/tmp/gradle-aab.log', 'utf8'); } catch(e) { try { log = fs.readFileSync('/tmp/gradle-apk.log','utf8'); } catch(e2){ log = 'no log: '+e.message; } }
+            const tail = log.slice(-8000);
+            const title = `Gradle Store Failure - Run ${context.runId}`;
+            const body = `**Build failed for commit ${context.sha}**\n\n\`\`\`\n${tail}\n\`\`\`\n\n[View run](https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`;
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: title,
+              body: body
+            });
