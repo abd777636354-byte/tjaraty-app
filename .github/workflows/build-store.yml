@@ -1,0 +1,113 @@
+name: Build Store - تِجارتي (AAB + APK)
+
+on:
+  push:
+    branches: [ "arena/01a109fb-tjaraty-app" ]
+  workflow_dispatch:
+
+jobs:
+  build-store:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build web (static export)
+        run: npm run build
+
+      - name: Sync Capacitor
+        run: npx cap sync android
+
+      - name: Generate Release Keystore (if not exists)
+        run: |
+          if [ ! -f android/app/tjaraty-release.keystore ]; then
+            keytool -genkey -v \
+              -keystore android/app/tjaraty-release.keystore \
+              -alias tjaraty \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass tjaraty123 -keypass tjaraty123 \
+              -dname "CN=Abdullah Al-Humairi, OU=Tjaraty, O=Tjaraty App, L=Aden, S=Aden, C=YE"
+            echo "✓ Keystore generated at android/app/tjaraty-release.keystore"
+          else
+            echo "✓ Keystore already exists"
+          fi
+          ls -lh android/app/*.keystore || true
+          # also encode for secrets backup
+          base64 -w 0 android/app/tjaraty-release.keystore > /tmp/keystore.b64
+          echo "Keystore base64 length: $(wc -c < /tmp/keystore.b64)"
+
+      - name: Build Release AAB (for Play Store)
+        working-directory: android
+        run: |
+          ./gradlew bundleRelease \
+            -PMYAPP_RELEASE_STORE_FILE=tjaraty-release.keystore \
+            -PMYAPP_RELEASE_STORE_PASSWORD=tjaraty123 \
+            -PMYAPP_RELEASE_KEY_ALIAS=tjaraty \
+            -PMYAPP_RELEASE_KEY_PASSWORD=tjaraty123 \
+            --stacktrace
+
+      - name: Build Release APK (signed)
+        working-directory: android
+        run: |
+          ./gradlew assembleRelease \
+            -PMYAPP_RELEASE_STORE_FILE=tjaraty-release.keystore \
+            -PMYAPP_RELEASE_STORE_PASSWORD=tjaraty123 \
+            -PMYAPP_RELEASE_KEY_ALIAS=tjaraty \
+            -PMYAPP_RELEASE_KEY_PASSWORD=tjaraty123 \
+            --stacktrace
+
+      - name: List outputs
+        run: |
+          ls -lh android/app/build/outputs/bundle/release/ || true
+          ls -lh android/app/build/outputs/apk/release/ || true
+
+      - name: Upload AAB (Play Store)
+        uses: actions/upload-artifact@v4
+        with:
+          name: tjaraty-store-aab
+          path: android/app/build/outputs/bundle/release/app-release.aab
+          retention-days: 30
+
+      - name: Upload Signed APK (Store)
+        uses: actions/upload-artifact@v4
+        with:
+          name: tjaraty-store-apk
+          path: android/app/build/outputs/apk/release/app-release.apk
+          retention-days: 30
+
+      - name: Upload Keystore (KEEP SAFE - reuse for updates!)
+        uses: actions/upload-artifact@v4
+        with:
+          name: tjaraty-keystore
+          path: |
+            android/app/tjaraty-release.keystore
+            /tmp/keystore.b64
+          retention-days: 90
+
+      - name: Print Next Steps
+        run: |
+          echo "✅ Store build complete!"
+          echo ""
+          echo "📦 AAB (for Play Console): android/app/build/outputs/bundle/release/app-release.aab"
+          echo "📱 APK signed: android/app/build/outputs/apk/release/app-release.apk"
+          echo "🔑 Keystore: android/app/tjaraty-release.keystore (password: tjaraty123, alias: tjaraty)"
+          echo ""
+          echo "⚠️ احتفظ بملف Keystore وكلمة السر في مكان آمن — لا يمكنك تحديث التطبيق بدون نفس المفتاح!"
