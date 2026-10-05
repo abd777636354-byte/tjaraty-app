@@ -24,22 +24,11 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Setup Android SDK (manual)
+      - name: Setup Android SDK
         run: |
           echo "ANDROID_HOME=$ANDROID_HOME"
-          ls -la $ANDROID_HOME 2>&1 | head -n 20 || true
           yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
-          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0" "platforms;android-34" "build-tools;34.0.0" || true
-          if [ ! -f "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" ]; then
-            echo "Downloading cmdline-tools..."
-            mkdir -p $ANDROID_HOME/cmdline-tools
-            wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O /tmp/cmdline-tools.zip
-            unzip -q /tmp/cmdline-tools.zip -d $ANDROID_HOME/cmdline-tools
-            mv $ANDROID_HOME/cmdline-tools/cmdline-tools $ANDROID_HOME/cmdline-tools/latest
-            yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
-            $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
-          fi
-          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --list | head -n 20 || true
+          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0" || true
 
       - name: Install dependencies
         run: npm ci
@@ -49,6 +38,11 @@ jobs:
 
       - name: Sync Capacitor
         run: npx cap sync android
+
+      - name: Create local.properties
+        run: |
+          echo "sdk.dir=$ANDROID_HOME" > android/local.properties
+          cat android/local.properties
 
       - name: Generate Release Keystore (if not exists)
         run: |
@@ -65,7 +59,6 @@ jobs:
           fi
           ls -lh android/app/*.keystore || true
           base64 -w 0 android/app/tjaraty-release.keystore > /tmp/keystore.b64 || true
-          echo "Keystore base64 ready"
 
       - name: Build Release AAB (for Play Store)
         working-directory: android
@@ -75,7 +68,7 @@ jobs:
             -PMYAPP_RELEASE_STORE_PASSWORD=tjaraty123 \
             -PMYAPP_RELEASE_KEY_ALIAS=tjaraty \
             -PMYAPP_RELEASE_KEY_PASSWORD=tjaraty123 \
-            --stacktrace
+            --stacktrace 2>&1 | tee /tmp/gradle-aab.log; test ${PIPESTATUS[0]} -eq 0
 
       - name: Build Release APK (signed)
         working-directory: android
@@ -85,7 +78,7 @@ jobs:
             -PMYAPP_RELEASE_STORE_PASSWORD=tjaraty123 \
             -PMYAPP_RELEASE_KEY_ALIAS=tjaraty \
             -PMYAPP_RELEASE_KEY_PASSWORD=tjaraty123 \
-            --stacktrace
+            --stacktrace 2>&1 | tee /tmp/gradle-apk.log; test ${PIPESTATUS[0]} -eq 0
 
       - name: List outputs
         run: |
@@ -114,3 +107,10 @@ jobs:
             android/app/tjaraty-release.keystore
             /tmp/keystore.b64
           retention-days: 90
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gradle-logs
+          path: /tmp/gradle-*.log

@@ -24,23 +24,12 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Setup Android SDK (manual)
+      - name: Setup Android SDK
         run: |
           echo "ANDROID_HOME=$ANDROID_HOME"
-          ls -la $ANDROID_HOME 2>&1 | head -n 20 || true
-          # Ubuntu runner already has Android SDK - ensure required components
+          ls -la $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager 2>&1 | head || true
           yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
-          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0" "platforms;android-34" "build-tools;34.0.0" || true
-          # fallback manual install if cmdline-tools missing
-          if [ ! -f "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" ]; then
-            echo "Downloading cmdline-tools..."
-            mkdir -p $ANDROID_HOME/cmdline-tools
-            wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O /tmp/cmdline-tools.zip
-            unzip -q /tmp/cmdline-tools.zip -d $ANDROID_HOME/cmdline-tools
-            mv $ANDROID_HOME/cmdline-tools/cmdline-tools $ANDROID_HOME/cmdline-tools/latest
-            yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
-            $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
-          fi
+          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0" || true
 
       - name: Install dependencies
         run: npm ci
@@ -51,12 +40,25 @@ jobs:
       - name: Sync Capacitor
         run: npx cap sync android
 
+      - name: Create local.properties
+        run: |
+          echo "sdk.dir=$ANDROID_HOME" > android/local.properties
+          cat android/local.properties
+          echo "sdk.dir=$ANDROID_HOME" > local.properties || true
+
       - name: Make gradlew executable
         run: chmod +x android/gradlew
 
       - name: Build Debug APK
         working-directory: android
-        run: ./gradlew assembleDebug --stacktrace
+        run: ./gradlew assembleDebug --stacktrace --info 2>&1 | tee /tmp/gradle-debug.log; test ${PIPESTATUS[0]} -eq 0
+
+      - name: Upload gradle log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gradle-debug-log
+          path: /tmp/gradle-debug.log
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
