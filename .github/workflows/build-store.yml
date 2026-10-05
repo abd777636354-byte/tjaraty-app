@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   issues: write
 
 jobs:
@@ -15,6 +15,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -44,7 +47,7 @@ jobs:
       - name: Sync Capacitor
         run: |
           npx cap sync android
-          ls -lh android/app/src/main/assets/public | head -n 30
+          ls -lh android/app/src/main/assets/public | head -n 20
 
       - name: Create local.properties
         run: |
@@ -115,6 +118,19 @@ jobs:
           name: tjaraty-keystore
           path: android/app/tjaraty-release.keystore
           retention-days: 90
+
+      - name: Commit Store files to repo (direct download)
+        if: success()
+        run: |
+          cp android/app/build/outputs/bundle/release/app-release.aab ./tjaraty-release.aab || true
+          cp android/app/build/outputs/apk/release/app-release.apk ./tjaraty-release.apk || true
+          cp android/app/tjaraty-release.keystore ./tjaraty-release.keystore || true
+          ls -lh ./tjaraty-release.* 2>&1 | head -n 20
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add tjaraty-release.aab tjaraty-release.apk tjaraty-release.keystore || true
+          git commit -m "chore: add store AAB/APK + keystore [skip ci]" || echo "no changes"
+          git push origin HEAD:arena/01a109fb-tjaraty-app || echo "push failed"
 
       - name: Report failure to issue
         if: failure()
