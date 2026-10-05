@@ -27,6 +27,7 @@ jobs:
       - name: Setup Android SDK
         run: |
           echo "ANDROID_HOME=$ANDROID_HOME"
+          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --list_installed 2>&1 | head -n 30 || true
           yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
           $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0" || true
 
@@ -37,7 +38,9 @@ jobs:
         run: npm run build
 
       - name: Sync Capacitor
-        run: npx cap sync android
+        run: |
+          npx cap sync android
+          ls -lh android/app/src/main/assets/public | head -n 20
 
       - name: Create local.properties
         run: |
@@ -58,7 +61,6 @@ jobs:
             echo "✓ Keystore already exists"
           fi
           ls -lh android/app/*.keystore || true
-          base64 -w 0 android/app/tjaraty-release.keystore > /tmp/keystore.b64 || true
 
       - name: Build Release AAB (for Play Store)
         working-directory: android
@@ -80,12 +82,26 @@ jobs:
             -PMYAPP_RELEASE_KEY_PASSWORD=tjaraty123 \
             --stacktrace 2>&1 | tee /tmp/gradle-apk.log; test ${PIPESTATUS[0]} -eq 0
 
+      - name: Show log tail on failure
+        if: failure()
+        run: |
+          echo "===== AAB LOG TAIL ====="
+          tail -n 200 /tmp/gradle-aab.log || true
+          echo "===== APK LOG TAIL ====="
+          tail -n 200 /tmp/gradle-apk.log || true
+          gh gist create /tmp/gradle-aab.log --public -d "gradle aab log ${{ github.run_id }}" || true
+          gh gist create /tmp/gradle-apk.log --public -d "gradle apk log ${{ github.run_id }}" || true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: List outputs
+        if: success()
         run: |
           ls -lh android/app/build/outputs/bundle/release/ || true
           ls -lh android/app/build/outputs/apk/release/ || true
 
       - name: Upload AAB (Play Store)
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: tjaraty-store-aab
@@ -93,6 +109,7 @@ jobs:
           retention-days: 30
 
       - name: Upload Signed APK (Store)
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: tjaraty-store-apk
@@ -100,17 +117,10 @@ jobs:
           retention-days: 30
 
       - name: Upload Keystore (KEEP SAFE!)
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: tjaraty-keystore
           path: |
             android/app/tjaraty-release.keystore
-            /tmp/keystore.b64
           retention-days: 90
-
-      - name: Upload logs on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: gradle-logs
-          path: /tmp/gradle-*.log

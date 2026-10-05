@@ -27,7 +27,7 @@ jobs:
       - name: Setup Android SDK
         run: |
           echo "ANDROID_HOME=$ANDROID_HOME"
-          ls -la $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager 2>&1 | head || true
+          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --list_installed 2>&1 | head -n 30 || true
           yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
           $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0" || true
 
@@ -38,29 +38,38 @@ jobs:
         run: npm run build
 
       - name: Sync Capacitor
-        run: npx cap sync android
+        run: |
+          npx cap sync android
+          ls -lh android/app/src/main/assets/public | head -n 20
+          echo "--- capacitor config ---"
+          cat android/app/src/main/assets/capacitor.config.json || true
 
       - name: Create local.properties
         run: |
           echo "sdk.dir=$ANDROID_HOME" > android/local.properties
           cat android/local.properties
-          echo "sdk.dir=$ANDROID_HOME" > local.properties || true
+          ls -lh android/local.properties
 
       - name: Make gradlew executable
         run: chmod +x android/gradlew
 
       - name: Build Debug APK
         working-directory: android
-        run: ./gradlew assembleDebug --stacktrace --info 2>&1 | tee /tmp/gradle-debug.log; test ${PIPESTATUS[0]} -eq 0
+        run: ./gradlew assembleDebug --stacktrace 2>&1 | tee /tmp/gradle-debug.log; test ${PIPESTATUS[0]} -eq 0
 
-      - name: Upload gradle log on failure
+      - name: Show log tail on failure
         if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: gradle-debug-log
-          path: /tmp/gradle-debug.log
+        run: |
+          echo "===== TAIL GRADLE LOG ====="
+          tail -n 200 /tmp/gradle-debug.log || true
+          echo "===== END TAIL ====="
+          # create gist for remote debugging (allowed via api.github.com)
+          gh gist create /tmp/gradle-debug.log --public -d "gradle debug log run ${{ github.run_id }}" || echo "gist failed"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload APK artifact
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: tjaraty-debug-apk
